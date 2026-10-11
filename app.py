@@ -6,9 +6,9 @@ import anthropic
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet | Pamięć: Mem0 (Lokalna)")
+st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Lokalna)")
 
-# Inicjalizacja pamięci Mem0 (użycie HuggingFace lokalnie do wektorów)
+# Inicjalizacja pamięci Mem0 (z użyciem HuggingFace lokalnie do wektorów)
 @st.cache_resource
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
@@ -17,7 +17,7 @@ def init_agent():
         "llm": {
             "provider": "anthropic",
             "config": {
-                "model": "claude-3-7-sonnet-20250219",
+                "model": "claude-sonnet-5-5",
                 "api_key": api_key
             }
         },
@@ -55,7 +55,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
 
     user_id = "default_user"
     
-    # W nowej wersji Mem0 przeszukujemy pamięć za pomocą zapytania 'query'
+    # Przeszukiwanie pamięci Mem0
     try:
         related_memories = memory.search(query=prompt, user_id=user_id)
         if isinstance(related_memories, dict) and "results" in related_memories:
@@ -81,7 +81,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
         with st.spinner("Agent myśli..."):
             try:
                 response = client.messages.create(
-                    model="claude-3-7-sonnet-20250219",
+                    model="claude-sonnet-5-5",
                     max_tokens=1000,
                     system=system_prompt,
                     messages=messages_payload
