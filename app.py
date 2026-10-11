@@ -100,10 +100,10 @@ with st.sidebar:
     st.header("⚙️ Ustawienia modelu")
     
     persona_options = {
-        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI. Masz dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
+        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI z dostępem do internetu. Masz dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
         "Programista Python / Excel Ekspert": "Jesteś ekspertem Pythona i analitykiem danych w Excelu. Piszesz zaawansowane skrypty, czytelny kod i tworzysz profesjonalne pliki Excela z automatycznymi formułami i formatowaniem w blokach kodu ```python.",
         "Kreatywny Copywriter": "Jesteś utalentowanym copywriterem i ekspertem od marketingu. Twoje wypowiedzi są angażujące i perswazyjne.",
-        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Skup się na logice, liczbach, strukturze oraz merytorycznym podejściu."
+        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Korzystaj z wyszukiwania w internecie w celu weryfikacji faktów."
     }
     selected_persona = st.selectbox("Rola / Tryb agenta:", list(persona_options.keys()))
     system_prompt_base = persona_options[selected_persona]
@@ -152,7 +152,7 @@ def execute_excel_code(code_str):
 
 # --- OBSŁUGA INPUTU I WYSYŁANIA NA POCZĄTKU STRUMIENIA ---
 uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "xlsx", "csv"])
-prompt = st.chat_input("Napisz coś do swojego agenta...")
+prompt = st.chat_input("Napisz coś do swojego agenta (np. 'Sprawdź w internecie...')...")
 
 if prompt or uploaded_file:
     user_content_blocks = []
@@ -199,7 +199,7 @@ if prompt or uploaded_file:
     current_chat["messages"].append({"role": "user", "content": user_content_blocks})
     save_data(conversations)
 
-    # Wywołanie API Anthropic z modelem claude-sonnet-5-5
+    # Wywołanie API Anthropic z natywnym narzędziem wyszukiwania sieciowego
     try:
         api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
@@ -232,10 +232,17 @@ if prompt or uploaded_file:
 
         messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
+        # Definicja natywnego narzędzia wyszukiwania internetowego Anthropic
+        web_search_tool = {
+            "type": "web_search_20250305",
+            "name": "web_search"
+        }
+
         response = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
             system=final_system_prompt,
+            tools=[web_search_tool],
             messages=messages_payload
         )
         
