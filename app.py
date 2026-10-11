@@ -6,12 +6,15 @@ from mem0 import Memory
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Lokalna)")
+st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Trwała)")
 
-# Inicjalizacja Mem0 z ChromaDB i najnowszym modelem Claude Sonnet 5.5
+# Inicjalizacja Mem0 ze stałą ścieżką bazy ChromaDB w folderze projektu
 @st.cache_resource
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    
+    # Stały folder na dysku projektu (dzięki temu pamięć nie znika po restarcie)
+    db_path = os.path.join(os.path.dirname(__file__), "chroma_db")
     
     config = {
         "llm": {
@@ -31,7 +34,7 @@ def init_agent():
             "provider": "chroma",
             "config": {
                 "collection_name": "memories",
-                "path": "/tmp/chroma_db"
+                "path": db_path
             }
         }
     }
@@ -95,7 +98,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                 assistant_reply = response.content[0].text
                 st.markdown(assistant_reply)
                 
-                # Zapis do pamięci
+                # Zapis do pamięci trwałej
                 memory.add(messages=[{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_reply}], user_id=user_id)
                 
                 st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
