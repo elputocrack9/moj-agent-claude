@@ -1,48 +1,34 @@
 import os
+import json
 import streamlit as st
 import anthropic
-from mem0 import Memory
 
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Trwała z Debugiem)")
+st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Trwała (JSON)")
 
-# Inicjalizacja Mem0 ze stałą ścieżką bazy ChromaDB w folderze projektu
-@st.cache_resource
-def init_agent():
-    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    db_path = os.path.join(os.path.dirname(__file__), "chroma_db")
-    
-    config = {
-        "llm": {
-            "provider": "anthropic",
-            "config": {
-                "model": "claude-sonnet-5-5",
-                "api_key": api_key
-            }
-        },
-        "embedder": {
-            "provider": "huggingface",
-            "config": {
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        },
-        "vector_store": {
-            "provider": "chroma",
-            "config": {
-                "collection_name": "memories",
-                "path": db_path
-            }
-        }
-    }
-    return Memory.from_config(config)
+# Ścieżka do pliku z pamięcią trwałą
+MEMORY_FILE = os.path.join(os.path.dirname(__file__), "user_memory.json")
 
-try:
-    memory = init_agent()
-except Exception as e:
-    st.error(f"Błąd inicjalizacji pamięci: {e}")
-    st.stop()
+def load_memories():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_memory(fact):
+    memories = load_memories()
+    if fact not in memories:
+        memories.append(fact)
+        try:
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(memories, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            st.error(f"Błąd zapisu pamięci: {e}")
 
 # Historia czatu w sesji Streamlita
 if "messages" not in st.session_state:
@@ -59,45 +45,22 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    user_id = "default_user"
-    
-    # Pobieranie WSZYSTKICH wspomnień dla użytkownika (eliminuje problem niedopasowania query w search)
-    context_str = "Brak wcześniejszych wspomnień."
-    try:
-        all_memories = memory.get_all(user_id=user_id)
-        # mem0 get_all zwraca zwykle listę słowników lub obiekt z kluczem
-        mem_list = []
-        if isinstance(all_memories, dict):
-            mem_list = all_memories.get("results", []) or all_memories.get("memories", [])
-        elif isinstance(all_memories, list):
-            mem_list = all_memories
-            
-        facts = []
-        for m in mem_list:
-            if isinstance(m, dict) and 'memory' in m:
-                facts.append(m['memory'])
-            elif hasattr(m, 'memory'):
-                facts.append(m.memory)
-                
-        if facts:
-            context_str = "\n".join([f"- {f}" for f in facts])
-    except Exception as err:
-        # Fallback do standardowego search
-        try:
-            related = memory.search(query=prompt, user_id=user_id)
-            mem_list = related.get("results", []) if isinstance(related, dict) else related
-            facts = [m.get('memory', '') for m in mem_list if isinstance(m, dict) and 'memory' in m]
-            if facts:
-                context_str = "\n".join([f"- {f}" for f in facts])
-        except Exception:
-            pass
+    # Automatyczne wyciąganie prostych faktów lub zapisywanie wypowiedzi użytkownika do pamięci
+    # Jeśli użytkownik podaje informację (np. "Mam na imię...", "Moja narzeczona..."), zapisujemy ją
+    lower_prompt = prompt.lower()
+    if any(keyword in lower_prompt for keyword in ["mam na imię", "nazywam się", "narzeczona", "dziewczyna", "żona", "mieszkam", "lat", "urodziła", "pracuję", "lubię"]):
+        save_memory(prompt)
+
+    # Pobieramy całą zgromadzoną pamięć trwale zapisaną w pliku
+    saved_facts = load_memories()
+    context_str = "\n".join([f"- {fact}" for fact in saved_facts]) if saved_facts else "Brak zapisanych faktów."
 
     # Klient Anthropic
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
     system_prompt = f"""Jesteś pomocnym, spersonalizowanym agentem AI. 
-    Wykorzystaj poniższe fakty z pamięci długoterminowej o użytkowniku, aby odpowiadać spersonalizowanie:
+    Oto fakty z pamięci długoterminowej o użytkowniku, które musisz bezwzględnie pamiętać i wykorzystywać:
     {context_str}
     """
 
@@ -122,10 +85,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                     assistant_reply = str(response.content)
 
                 st.markdown(assistant_reply)
-                
-                # Zapis do pamięci trwałej
-                memory.add(messages=[{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_reply}], user_id=user_id)
-                
                 st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+                
             except Exception as e:
                 st.error(f"Wystąpił błąd podczas generowania odpowiedzi: {e}")
