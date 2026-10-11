@@ -1,82 +1,89 @@
 import os
-import streamlit as st
-from anthropic import Anthropic
 from mem0 import Memory
+import streamlit as st
 
-# 1. Ustawienia wyglądu aplikacji mobilnej
-st.set_page_config(page_title="Mój Agent Claude", page_icon="🤖", layout="centered")
+st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
+
 st.title("🤖 Personalny Agent AI")
-st.caption("Model: Claude Sonnet | Pamięć: Mem0")
+st.markdown("Model: Claude Sonnet | Pamięć: Mem0 (Lokalna)")
 
-# 2. Pobranie klucza API ze zmiennych środowiskowych
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-
-if not api_key:
-    st.error("⚠️ Brak klucza ANTHROPIC_API_KEY! Dodaj go w panelu Streamlit Cloud.")
-    st.stop()
-
-# 3. Inicjalizacja połączenia z API i Pamięcią
+# Inicjalizacja agenta i pamięci Mem0 (z użyciem HuggingFace zamiast OpenAI)
 @st.cache_resource
 def init_agent():
-    client = Anthropic(api_key=api_key)
-    mem = Memory()
-    return client, mem
+    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    
+    config = {
+        "llm": {
+            "provider": "anthropic",
+            "config": {
+                "model": "claude-3-7-sonnet-20250219",
+                "api_key": api_key
+            }
+        },
+        "embedder": {
+            "provider": "huggingface",
+            "config": {
+                "model": "sentence-transformers/all-MiniLM-L6-v2"
+            }
+        }
+    }
+    
+    memory = Memory.from_config(config)
+    return memory
 
-anthropic_client, memory = init_agent()
-USER_ID = "glowny_uzytkownik"
+try:
+    memory = init_agent()
+except Exception as e:
+    st.error(f"Błąd inicjalizacji pamięci: {e}")
+    st.stop()
 
-# 4. Historia rozmowy w bieżącej sesji
+# Historia czatu w sesji Streamlita
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Wyświetlanie czatu na ekranie
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# Wyświetlanie dotychczasowej historii rozmowy
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# 5. Reakcja na wpisanie wiadomości przez użytkownika
-if prompt := st.chat_input("Napisz do agenta..."):
+# Obsługa wpisywania wiadomości przez użytkownika
+if prompt := st.chat_input("Napisz coś do swojego agenta..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # A. Przeszukiwanie pamięci długoterminowej
-    with st.spinner("Szukam w pamięci..."):
-        relevant_memories = memory.search(query=prompt, user_id=USER_ID)
-        kontekst_pamieci = ""
-        if relevant_memories and "results" in relevant_memories:
-            fakty = [m["memory"] for m in relevant_memories["results"]]
-            if fakty:
-                kontekst_pamieci = "\n".join(f"- {f}" for f in fakty)
+    # Pobieranie kontekstu z pamięci Mem0
+    user_id = "default_user"
+    related_memories = memory.search(prompt, user_id=user_id)
+    context_str = "\n".join([m['memory'] for m in related_memories]) if related_memories else "Brak wcześniejszych wspomnień."
 
-    # B. Instrukcja główna (Prompt Systemowy)
-    system_prompt = (
-        "Jesteś prywatnym, inteligentnym asystentem osobistym.\n"
-        "Pomagasz użytkownikowi w codziennych zadaniach, researchu i analizach.\n"
-        "Masz dostęp do pamięci długoterminowej z Waszych poprzednich rozmów.\n\n"
-        f"FAKTY Z PAMIĘCI DŁUGOTERMINOWEJ O UŻYTKOWNIKU:\n{kontekst_pamieci if kontekst_pamieci else 'Brak zapisanych wcześniejszych faktów.'}\n\n"
-        "Wykorzystuj tę wiedzę w sposób naturalny i pomocny."
-    )
+    # Przygotowanie wiadomości dla Claude'a
+    import anthropic
+    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    client = anthropic.Anthropic(api_key=api_key)
 
-    # C. Wywołanie najnowszego modelu Sonnet z API
+    system_prompt = f"""Jesteś pomocnym, spersonalizowanym agentem AI. 
+    Oto fakty z pamięci długoterminowej o użytkowniku:
+    {context_str}
+    """
+
+    messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+
     with st.chat_message("assistant"):
-        with st.spinner("Claude odpowiada..."):
-            response = anthropic_client.messages.create(
-                model="claude-3-5-sonnet-latest",  # Wskazuje zawsze na najnowszy stablilny Sonnet
-                max_tokens=2000,
-                system=system_prompt,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            answer = response.content[0].text
-            st.markdown(answer)
-
-    # D. Zapis do bieżącej sesji i nowej pamięci Mem0
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    
-    memory.add(
-        messages=[
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": answer}
-        ],
-        user_id=USER_ID
-    )
+        with st.spinner("Agent myśli..."):
+            try:
+                response = client.messages.create(
+                    model="claude-3-7-sonnet-20250219",
+                    max_tokens=1000,
+                    system=system_prompt,
+                    messages=messages_payload
+                )
+                assistant_reply = response.content[0].text
+                st.markdown(assistant_reply)
+                
+                # Zapisanie nowej interakcji w pamięci Mem0
+                memory.add(f"Użytkownik powiedział: {prompt}. Odpowiedź agenta: {assistant_reply}", user_id=user_id)
+                
+                st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+            except Exception as e:
+                st.error(f"Wystąpił błąd podczas generowania odpowiedzi: {e}")
