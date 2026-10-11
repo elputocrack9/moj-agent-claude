@@ -295,7 +295,7 @@ if prompt or uploaded_file:
         with st.spinner("Agent analizuje i przetwarza..."):
             try:
                 response = client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
+                    model="claude-sonnet-5-5",
                     max_tokens=2500,
                     system=final_system_prompt,
                     messages=messages_payload
