@@ -199,7 +199,7 @@ if prompt or uploaded_file:
     current_chat["messages"].append({"role": "user", "content": user_content_blocks})
     save_data(conversations)
 
-    # Wywołanie API Anthropic
+    # Wywołanie API Anthropic z modelem claude-sonnet-5-5
     try:
         api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
@@ -233,7 +233,7 @@ if prompt or uploaded_file:
         messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-5-5",
             max_tokens=2500,
             system=final_system_prompt,
             messages=messages_payload
@@ -254,7 +254,7 @@ if prompt or uploaded_file:
     except Exception as e:
         st.error(f"Wystąpił krytyczny błąd podczas komunikacji z API: {e}")
 
-# --- RENDEROWANIE HISTORIE WIADOMOŚCI ---
+# --- RENDEROWANIE HISTORII WIADOMOŚCI ---
 for idx, message in enumerate(current_chat["messages"]):
     role = message["role"]
     content = message["content"]
