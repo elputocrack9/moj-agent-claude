@@ -96,6 +96,8 @@ for message in current_chat["messages"]:
                         data_b64 = source.get("data", "")
                         media_type = source.get("media_type", "image/png")
                         st.image(f"data:{media_type};base64,{data_b64}", width=300)
+                    elif part.get("type") == "document":
+                        st.info("📄 [Załączony dokument PDF z poprzednich wiadomości]")
         else:
             st.markdown(str(content))
 
@@ -157,40 +159,29 @@ if prompt or uploaded_file:
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
-    # --- KLUCZOWA ZMIANA: ZBIERANIE HISTORI ZE WSZYSTKICH CZATÓW JAKO KONTEKST ---
-    global_history_summary = "Oto podsumowanie/historia wcześniejszych rozmów z użytkownikiem we wszystkich wątkach:\n"
-    for cid, cdata in conversations.items():
-        if cid != current_id and cdata.get("messages"):
-            global_history_summary += f"\n--- Wątek: {cdata.get('title', 'Czat')} ---\n"
-            for msg in cdata["messages"]:
-                role = msg["role"]
-                content = msg["content"]
-                # Wyciągamy sam tekst do pamięci długoterminowej między wątkami
-                text_snippet = ""
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            text_snippet += part.get("text", "") + " "
-                else:
-                    text_snippet = str(content)
-                global_history_summary += f"{role}: {text_snippet.strip()}\n"
-
-    system_prompt = f"""Jesteś pomocnym, inteligentnym agentem AI. Masz pełną pamięć o użytkowniku z jego poprzednich konwersacji w innych wątkach. Wykorzystuj te informacje naturalnie w odpowiedziach:
+    # --- BUDOWANIE KONTEKSTU ZE WSZYSTKICH WĄTKÓW (W TYM OBRAZÓW I PLIKÓW) ---
+    # W tym podejściu przekazujemy do Anthropic API historyczne wiadomości ze wszystkich wątków,
+    # dzięki czemu model faktycznie „widzi” obrazy i dokumenty z przeszłości, a nie tylko sam tekst.
+    full_history_payload = []
     
-    {global_history_summary}
-    """
+    for cid, cdata in conversations.items():
+        # Dołączamy wiadomości ze wszystkich zapisanych wątków
+        for msg in cdata.get("messages", []):
+            full_history_payload.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
 
-    # Payload bieżącego czatu
-    messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
+    system_prompt = "Jesteś pomocnym, inteligentnym agentem AI. Masz pełną pamięć o użytkowniku, w tym dostęp do wszystkich wcześniej przesłanych obrazów, dokumentów oraz treści z jego poprzednich konwersacji we wszystkich wątkach."
 
     with st.chat_message("assistant"):
         with st.spinner("Agent analizuje..."):
             try:
                 response = client.messages.create(
-                    model="claude-sonnet-5-5",
+                    model="clason-sonnet-5-5" if False else "claude-sonnet-5-5", # upewnienie poprawnej nazwy modelu
                     max_tokens=1500,
                     system=system_prompt,
-                    messages=messages_payload
+                    messages=full_history_payload
                 )
                 
                 assistant_reply = ""
@@ -203,6 +194,7 @@ if prompt or uploaded_file:
 
                 st.markdown(assistant_reply)
                 
+                # Dodajemy odpowiedź do aktualnego wątku
                 current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
                 save_data(conversations)
                 
