@@ -267,8 +267,6 @@ if prompt or uploaded_file:
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
-    # --- INTELIGENTNA OPTYMALIZACJA PAMIĘCI (ZAMIAST SUROWEGO SPAMU TOKENÓW) ---
-    # Tworzymy lekki kontekst z podsumowaniem innych wątków
     other_chats_memory = "\n[Kontekst z innych Twoich wątków/rozmów z użytkownikiem]:\n"
     has_other_content = False
     for cid, cdata in conversations.items():
@@ -291,14 +289,13 @@ if prompt or uploaded_file:
     if has_other_content:
         final_system_prompt += f"\n{other_chats_memory}"
 
-    # Wysyłamy do API wyłącznie wiadomości z AKTUALNEGO czatu + zoptymalizowany prompt systemowy
     messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
         with st.spinner("Agent analizuje i przetwarza..."):
             try:
                 response = client.messages.create(
-                    model="claude-3-5-sonnet-latest",
+                    model="claude-3-5-sonnet",
                     max_tokens=2500,
                     system=final_system_prompt,
                     messages=messages_payload
