@@ -6,9 +6,9 @@ from mem0 import Memory
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude 3.5 Sonnet | Pamięć: Mem0 (Lokalna)")
+st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Lokalna)")
 
-# Inicjalizacja Mem0 z ChromaDB i bezpiecznym identyfikatorem modelu
+# Inicjalizacja Mem0 z ChromaDB i najnowszym modelem Claude Sonnet 5.5
 @st.cache_resource
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
@@ -17,7 +17,7 @@ def init_agent():
         "llm": {
             "provider": "anthropic",
             "config": {
-                "model": "claude-3-5-sonnet",
+                "model": "claude-sonnet-5-5",
                 "api_key": api_key
             }
         },
@@ -87,7 +87,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
         with st.spinner("Agent myśli..."):
             try:
                 response = client.messages.create(
-                    model="claude-3-5-sonnet",
+                    model="claude-sonnet-5-5",
                     max_tokens=1000,
                     system=system_prompt,
                     messages=messages_payload
