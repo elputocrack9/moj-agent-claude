@@ -92,7 +92,7 @@ with st.sidebar:
     st.header("⚙️ Ustawienia modelu")
     
     persona_options = {
-        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI. Masz pełną pamięć o użytkowniku, w tym dostęp do wszystkich wcześniej przesłanych obrazów, dokumentów oraz treści z jego poprzednich konwersacji. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
+        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI. Masz dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
         "Programista Python / Excel Ekspert": "Jesteś ekspertem Pythona i analitykiem danych w Excelu. Piszesz zaawansowane skrypty, czytelny kod i tworzysz profesjonalne pliki Excela z automatycznymi formułami i formatowaniem w blokach kodu ```python.",
         "Kreatywny Copywriter": "Jesteś utalentowanym copywriterem i ekspertem od marketingu. Twoje wypowiedzi są angażujące i perswazyjne.",
         "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Skup się na logice, liczbach, strukturze oraz merytorycznym podejściu."
@@ -267,13 +267,32 @@ if prompt or uploaded_file:
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
-    full_history_payload = []
+    # --- INTELIGENTNA OPTYMALIZACJA PAMIĘCI (ZAMIAST SUROWEGO SPAMU TOKENÓW) ---
+    # Tworzymy lekki kontekst z podsumowaniem innych wątków
+    other_chats_memory = "\n[Kontekst z innych Twoich wątków/rozmów z użytkownikiem]:\n"
+    has_other_content = False
     for cid, cdata in conversations.items():
-        for msg in cdata.get("messages", []):
-            full_history_payload.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
+        if cid != current_id:
+            chat_title = cdata.get("title", "Czat")
+            snippet = ""
+            for msg in cdata.get("messages", []):
+                content = msg["content"]
+                if isinstance(content, list):
+                    for p in content:
+                        if isinstance(p, dict) and p.get("type") == "text":
+                            snippet += p.get("text", "") + " "
+                else:
+                    snippet += str(content) + " "
+            if snippet.strip():
+                has_other_content = True
+                other_chats_memory += f"- Wątek '{chat_title}': {snippet[:300]}...\n"
+
+    final_system_prompt = system_prompt_base
+    if has_other_content:
+        final_system_prompt += f"\n{other_chats_memory}"
+
+    # Wysyłamy do API wyłącznie wiadomości z AKTUALNEGO czatu + zoptymalizowany prompt systemowy
+    messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
         with st.spinner("Agent analizuje i przetwarza..."):
@@ -281,8 +300,8 @@ if prompt or uploaded_file:
                 response = client.messages.create(
                     model="claude-3-5-sonnet-latest",
                     max_tokens=2500,
-                    system=system_prompt_base,
-                    messages=full_history_payload
+                    system=final_system_prompt,
+                    messages=messages_payload
                 )
                 
                 assistant_reply = ""
