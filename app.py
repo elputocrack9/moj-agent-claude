@@ -1,70 +1,116 @@
 import os
 import json
+import uuid
 import streamlit as st
 import anthropic
 
-st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
+st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖", layout="wide")
 
-st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Trwała (JSON)")
+DB_FILE = os.path.join(os.path.dirname(__file__), "conversations.json")
 
-# Ścieżka do pliku z pamięcią trwałą
-MEMORY_FILE = os.path.join(os.path.dirname(__file__), "user_memory.json")
-
-def load_memories():
-    if os.path.exists(MEMORY_FILE):
+def load_data():
+    if os.path.exists(DB_FILE):
         try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return []
-    return []
+            return {}
+    return {}
 
-def save_memory(fact):
-    memories = load_memories()
-    if fact not in memories:
-        memories.append(fact)
-        try:
-            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-                json.dump(memories, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            st.error(f"Błąd zapisu pamięci: {e}")
+def save_data(data):
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Błąd zapisu danych: {e}")
 
-# Historia czatu w sesji Streamlita
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Inicjalizacja bazy konwersacji
+conversations = load_data()
 
-# Wyświetlanie historii
-for message in st.session_state.messages:
+# Zarządzanie aktywnym czatem w sesji
+if "current_chat_id" not in st.session_state:
+    if conversations:
+        # Domyślnie wybierz pierwszą z dostępnych
+        st.session_state.current_chat_id = list(conversations.keys())[0]
+    else:
+        # Utwórz nową, jeśli brak
+        new_id = str(uuid.uuid4())[:8]
+        conversations[new_id] = {"title": "Nowa konwersacja", "messages": []}
+        save_data(conversations)
+        st.session_state.current_chat_id = new_id
+
+# --- PANEL BOCZNY (HISTORIA CZATÓW JAK W GEMINI) ---
+with st.sidebar:
+    st.header("💬 Twoje Konwersacje")
+    
+    if st.button("➕ Nowy czat", use_container_width=True):
+        new_id = str(uuid.uuid4())[:8]
+        conversations[new_id] = {"title": "Nowa konwersacja", "messages": []}
+        save_data(conversations)
+        st.session_state.current_chat_id = new_id
+        st.rerun()
+
+    st.divider()
+
+    # Wyświetlanie listy wszystkich konwersacji
+    # Sortujemy od najnowszych (klucze lub po prostu iteracja)
+    for chat_id, chat_data in list(conversations.items()):
+        title = chat_data.get("title", "Konwersacja")
+        # Podświetlenie aktywnego czatu
+        is_active = (chat_id == st.session_state.current_chat_id)
+        
+        col1, col2 = st.columns([0.8, 0.2])
+        with col1:
+            if st.button(title, key=f"chat_{chat_id}", use_container_width=True, type="primary" if is_active else "secondary"):
+                st.session_state.current_chat_id = chat_id
+                st.rerun()
+        with col2:
+            if st.button("🗑️", key=f"del_{chat_id}"):
+                if chat_id in conversations:
+                    del conversations[chat_id]
+                    save_data(conversations)
+                    if conversations:
+                        st.session_state.current_chat_id = list(conversations.keys())[0]
+                    else:
+                        new_id = str(uuid.uuid4())[:8]
+                        conversations[new_id] = {"title": "Nowa konwersacja", "messages": []}
+                        save_data(conversations)
+                        st.session_state.current_chat_id = new_id
+                    st.rerun()
+
+# Główny interfejs czatu
+current_id = st.session_state.current_chat_id
+if current_id not in conversations:
+    # Zabezpieczenie, gdyby aktualny ID został usunięty
+    current_id = list(conversations.keys())[0]
+    st.session_state.current_chat_id = current_id
+
+current_chat = conversations[current_id]
+
+st.title("🤖 Personalny Agent AI")
+st.markdown(f"Aktualny czat: **{current_chat.get('title', 'Konwersacja')}**")
+
+# Wyświetlanie wiadomości z aktywnego czatu
+for message in current_chat["messages"]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Obsługa wiadomości
+# Obsługa wpisywania wiadomości
 if prompt := st.chat_input("Napisz coś do swojego agenta..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Jeśli to pierwsza wiadomość, ustaw tytuł czatu na podstawie treści promptu
+    if len(current_chat["messages"]) == 0:
+        current_chat["title"] = prompt[:30] + ("..." if len(prompt) > 30 else "")
+
+    current_chat["messages"].append({"role": "user", "content": prompt})
+    save_data(conversations)
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Automatyczne wyciąganie prostych faktów lub zapisywanie wypowiedzi użytkownika do pamięci
-    # Jeśli użytkownik podaje informację (np. "Mam na imię...", "Moja narzeczona..."), zapisujemy ją
-    lower_prompt = prompt.lower()
-    if any(keyword in lower_prompt for keyword in ["mam na imię", "nazywam się", "narzeczona", "dziewczyna", "żona", "mieszkam", "lat", "urodziła", "pracuję", "lubię"]):
-        save_memory(prompt)
-
-    # Pobieramy całą zgromadzoną pamięć trwale zapisaną w pliku
-    saved_facts = load_memories()
-    context_str = "\n".join([f"- {fact}" for fact in saved_facts]) if saved_facts else "Brak zapisanych faktów."
-
-    # Klient Anthropic
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
-    system_prompt = f"""Jesteś pomocnym, spersonalizowanym agentem AI. 
-    Oto fakty z pamięci długoterminowej o użytkowniku, które musisz bezwzględnie pamiętać i wykorzystywać:
-    {context_str}
-    """
-
-    messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
         with st.spinner("Agent myśli..."):
@@ -72,7 +118,6 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                 response = client.messages.create(
                     model="claude-sonnet-5-5",
                     max_tokens=1000,
-                    system=system_prompt,
                     messages=messages_payload
                 )
                 
@@ -85,7 +130,8 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                     assistant_reply = str(response.content)
 
                 st.markdown(assistant_reply)
-                st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+                current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
+                save_data(conversations)
                 
             except Exception as e:
                 st.error(f"Wystąpił błąd podczas generowania odpowiedzi: {e}")
