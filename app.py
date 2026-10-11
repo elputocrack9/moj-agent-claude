@@ -13,7 +13,6 @@ st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Trwała)")
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     
-    # Stały folder na dysku projektu (dzięki temu pamięć nie znika po restarcie)
     db_path = os.path.join(os.path.dirname(__file__), "chroma_db")
     
     config = {
@@ -95,7 +94,16 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                     system=system_prompt,
                     messages=messages_payload
                 )
-                assistant_reply = response.content[0].text
+                
+                # Bezpieczne wyciąganie tekstu z odpowiedzi (pomijanie bloków myślowych)
+                assistant_reply = ""
+                for content_block in response.content:
+                    if hasattr(content_block, "text"):
+                        assistant_reply += content_block.text
+                
+                if not assistant_reply:
+                    assistant_reply = str(response.content)
+
                 st.markdown(assistant_reply)
                 
                 # Zapis do pamięci trwałej
