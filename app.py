@@ -93,10 +93,10 @@ with st.sidebar:
     st.header("⚙️ Ustawienia modelu")
     
     persona_options = {
-        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI z dostępem do przeszukiwania internetu w czasie rzeczywistym. Masz również dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
+        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI z dostępem do internetu. Masz również dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
         "Programista Python / Excel Ekspert": "Jesteś ekspertem Pythona i analitykiem danych w Excelu. Piszesz zaawansowane skrypty, czytelny kod i tworzysz profesjonalne pliki Excela z automatycznymi formułami i formatowaniem w blokach kodu ```python.",
         "Kreatywny Copywriter": "Jesteś utalentowanym copywriterem i ekspertem od marketingu. Twoje wypowiedzi są angażujące i perswazyjne.",
-        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Korzystaj z wyszukiwania w internecie w razie potrzeby weryfikacji faktów i liczb."
+        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Skup się na logice, liczbach, strukturze oraz merytorycznym podejściu."
     }
     selected_persona = st.selectbox("Rola / Tryb agenta:", list(persona_options.keys()))
     system_prompt_base = persona_options[selected_persona]
@@ -152,21 +152,6 @@ def execute_excel_code(code_str):
         st.error(f"Błąd podczas generowania pliku Excel: {e}")
     return None, None
 
-search_tool_definition = {
-    "name": "web_search",
-    "description": "Wyszukuje informacje w Internecie. Używaj tego narzędzia zawsze, gdy potrzebujesz aktualnych wiadomości, faktów, dokumentacji lub danych z sieci.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Zapytanie wyszukiwania w Google / Internecie."
-            }
-        },
-        "required": ["query"]
-    }
-}
-
 def perform_web_search(query):
     try:
         results = DDGS().text(query, max_results=4)
@@ -180,10 +165,7 @@ for idx, message in enumerate(current_chat["messages"]):
     role = message["role"]
     content = message["content"]
     
-    if role == "tool":
-        continue
-
-    with st.chat_message(role if role != "tool" else "assistant"):
+    with st.chat_message(role):
         text_content = ""
         if isinstance(content, list):
             for part in content:
@@ -241,168 +223,3 @@ for idx, message in enumerate(current_chat["messages"]):
 
 uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "xlsx", "csv"])
 prompt = st.chat_input("Napisz coś do swojego agenta...")
-
-if prompt or uploaded_file:
-    user_content_blocks = []
-    
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-        encoded_file = base64.b64encode(file_bytes).decode("utf-8")
-        file_type = uploaded_file.type
-        
-        if file_type.startswith("image/"):
-            user_content_blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": file_type, "data": encoded_file}
-            })
-        elif file_type == "application/pdf":
-            user_content_blocks.append({
-                "type": "document",
-                "source": {"type": "base64", "media_type": "application/pdf", "data": encoded_file}
-            })
-        elif file_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv"]:
-            try:
-                if file_type == "text/csv":
-                    df = pd.read_csv(io.BytesIO(file_bytes))
-                else:
-                    df = pd.read_excel(io.BytesIO(file_bytes))
-                csv_preview = df.head(20).to_csv(index=False)
-                user_content_blocks.append({
-                    "type": "text",
-                    "text": f"[Użytkownik załączył plik danych '{uploaded_file.name}'. Oto pierwsze wiersze danych w formacie CSV]:\n{csv_preview}"
-                })
-            except Exception as ex:
-                st.error(f"Nie udało się odczytać arkusza: {ex}")
-
-    if prompt:
-        user_content_blocks.append({"type": "text", "text": prompt})
-    else:
-        if not user_content_blocks:
-            user_content_blocks.append({"type": "text", "text": "[Użytkownik załączył plik]"})
-
-    if len(current_chat["messages"]) == 0:
-        title_text = prompt if prompt else "Załącznik"
-        current_chat["title"] = title_text[:30] + ("..." if len(title_text) > 30 else "")
-
-    current_chat["messages"].append({"role": "user", "content": user_content_blocks})
-    save_data(conversations)
-
-    with st.chat_message("user"):
-        if prompt:
-            st.markdown(prompt)
-        if uploaded_file is not None and uploaded_file.type.startswith("image/"):
-            st.image(uploaded_file, width=300)
-
-    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    client = anthropic.Anthropic(api_key=api_key)
-
-    other_chats_memory = "\n[Kontekst z innych Twoich wątków/rozmów z użytkownikiem]:\n"
-    has_other_content = False
-    for cid, cdata in conversations.items():
-        if cid != current_id:
-            chat_title = cdata.get("title", "Czat")
-            snippet = ""
-            for msg in cdata.get("messages", []):
-                content = msg["content"]
-                if isinstance(content, list):
-                    for p in content:
-                        if isinstance(p, dict) and p.get("type") == "text":
-                            snippet += p.get("text", "") + " "
-                elif isinstance(content, str):
-                    snippet += content + " "
-            if snippet.strip():
-                has_other_content = True
-                other_chats_memory += f"- Wątek '{chat_title}': {snippet[:300]}...\n"
-
-    final_system_prompt = system_prompt_base
-    if has_other_content:
-        final_system_prompt += f"\n{other_chats_memory}"
-
-    messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
-
-    # --- AUTOMATYCZNY SANITIZER HISTORII (ELIMINUJE BŁĄD 400 TOOL_USE) ---
-    cleaned_messages = []
-    i = 0
-    while i < len(messages_payload):
-        msg = messages_payload[i]
-        content = msg.get("content")
-        has_tool_use = False
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    has_tool_use = True
-
-        if has_tool_use:
-            if i + 1 < len(messages_payload) and messages_payload[i + 1].get("role") == "user":
-                next_content = messages_payload[i + 1].get("content")
-                is_tool_res = False
-                if isinstance(next_content, list):
-                    for nb in next_content:
-                        if isinstance(nb, dict) and nb.get("type") == "tool_result":
-                            is_tool_res = True
-                if is_tool_res:
-                    cleaned_messages.append(msg)
-                    cleaned_messages.append(messages_payload[i + 1])
-                    i += 2
-                    continue
-            # Jeśli tool_use nie ma wyniku, pomijamy go, żeby nie wywalić błędu API
-            i += 1
-        else:
-            cleaned_messages.append(msg)
-            i += 1
-    messages_payload = cleaned_messages
-
-    with st.chat_message("assistant"):
-        with st.spinner("Agent analizuje, przeszukuje internet i przetwarza..."):
-            try:
-                while True:
-                    response = client.messages.create(
-                        model="claude-sonnet-5-5",
-                        max_tokens=2500,
-                        system=final_system_prompt,
-                        tools=[search_tool_definition],
-                        messages=messages_payload
-                    )
-                    
-                    if response.stop_reason == "tool_use":
-                        tool_use_block = next((block for block in response.content if block.type == "tool_use"), None)
-                        if tool_use_block:
-                            tool_use_id = tool_use_block.id
-                            tool_input = tool_use_block.input
-                            query_str = tool_input.get("query", "")
-                            
-                            search_results_json = perform_web_search(query_str)
-                            
-                            messages_payload.append({
-                                "role": "assistant",
-                                "content": response.content
-                            })
-                            messages_payload.append({
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_use_id,
-                                        "content": search_results_json
-                                    }
-                                ]
-                            })
-                            continue
-                    
-                    assistant_reply = ""
-                    for content_block in response.content:
-                        if hasattr(content_block, "text"):
-                            assistant_reply += content_block.text
-                    
-                    if not assistant_reply:
-                        assistant_reply = str(response.content)
-
-                    st.markdown(assistant_reply)
-                    
-                    current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
-                    save_data(conversations)
-                    st.rerun()
-                    break
-                
-            except Exception as e:
-                st.error(f"Wystąpił błąd podczas generowania odpowiedzi: {e}")
