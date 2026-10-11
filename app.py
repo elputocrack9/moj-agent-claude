@@ -6,13 +6,12 @@ from mem0 import Memory
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Trwała)")
+st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Trwała z Debugiem)")
 
 # Inicjalizacja Mem0 ze stałą ścieżką bazy ChromaDB w folderze projektu
 @st.cache_resource
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    
     db_path = os.path.join(os.path.dirname(__file__), "chroma_db")
     
     config = {
@@ -37,7 +36,6 @@ def init_agent():
             }
         }
     }
-    
     return Memory.from_config(config)
 
 try:
@@ -63,23 +61,43 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
 
     user_id = "default_user"
     
-    # Przeszukiwanie pamięci Mem0
+    # Pobieranie WSZYSTKICH wspomnień dla użytkownika (eliminuje problem niedopasowania query w search)
+    context_str = "Brak wcześniejszych wspomnień."
     try:
-        related_memories = memory.search(query=prompt, user_id=user_id)
-        if isinstance(related_memories, dict) and "results" in related_memories:
-            mem_list = related_memories["results"]
-        else:
-            mem_list = related_memories if isinstance(related_memories, list) else []
-        context_str = "\n".join([m['memory'] for m in mem_list if isinstance(m, dict) and 'memory' in m]) if mem_list else "Brak wcześniejszych wspomnień."
-    except Exception:
-        context_str = "Brak wcześniejszych wspomnień."
+        all_memories = memory.get_all(user_id=user_id)
+        # mem0 get_all zwraca zwykle listę słowników lub obiekt z kluczem
+        mem_list = []
+        if isinstance(all_memories, dict):
+            mem_list = all_memories.get("results", []) or all_memories.get("memories", [])
+        elif isinstance(all_memories, list):
+            mem_list = all_memories
+            
+        facts = []
+        for m in mem_list:
+            if isinstance(m, dict) and 'memory' in m:
+                facts.append(m['memory'])
+            elif hasattr(m, 'memory'):
+                facts.append(m.memory)
+                
+        if facts:
+            context_str = "\n".join([f"- {f}" for f in facts])
+    except Exception as err:
+        # Fallback do standardowego search
+        try:
+            related = memory.search(query=prompt, user_id=user_id)
+            mem_list = related.get("results", []) if isinstance(related, dict) else related
+            facts = [m.get('memory', '') for m in mem_list if isinstance(m, dict) and 'memory' in m]
+            if facts:
+                context_str = "\n".join([f"- {f}" for f in facts])
+        except Exception:
+            pass
 
     # Klient Anthropic
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
     system_prompt = f"""Jesteś pomocnym, spersonalizowanym agentem AI. 
-    Oto fakty z pamięci długoterminowej o użytkowniku:
+    Wykorzystaj poniższe fakty z pamięci długoterminowej o użytkowniku, aby odpowiadać spersonalizowanie:
     {context_str}
     """
 
@@ -95,7 +113,6 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                     messages=messages_payload
                 )
                 
-                # Bezpieczne wyciąganie tekstu z odpowiedzi (pomijanie bloków myślowych)
                 assistant_reply = ""
                 for content_block in response.content:
                     if hasattr(content_block, "text"):
