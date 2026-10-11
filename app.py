@@ -1,23 +1,27 @@
 import os
-from mem0 import Memory
+import tempfile
 import streamlit as st
 import anthropic
+from mem0 import Memory
 
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
-st.markdown("Model: Claude Sonnet 5.5 | Pamięć: Mem0 (Lokalna)")
+st.markdown("Model: Claude 3.5 Sonnet | Pamięć: Mem0 (Lokalna)")
 
-# Inicjalizacja pamięci Mem0 (z użyciem HuggingFace lokalnie do wektorów)
+# Tworzenie bezpiecznej ścieżki dla lokalnej bazy Qdrant, aby zapobiec blokadzie plików
 @st.cache_resource
-def init_agent():
+def get_memory_config():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    
+    # Tworzymy tymczasowy katalog, żeby uniknąć błędu "already accessed by another instance"
+    qdrant_dir = os.path.join(tempfile.gettempdir(), "qdrant_mem0_db")
     
     config = {
         "llm": {
             "provider": "anthropic",
             "config": {
-                "model": "claude-sonnet-5-5",
+                "model": "claude-3-5-sonnet-latest",
                 "api_key": api_key
             }
         },
@@ -26,11 +30,20 @@ def init_agent():
             "config": {
                 "model": "sentence-transformers/all-MiniLM-L6-v2"
             }
+        },
+        "vector_store": {
+            "provider": "qdrant",
+            "config": {
+                "path": qdrant_dir
+            }
         }
     }
-    
-    memory = Memory.from_config(config)
-    return memory
+    return config
+
+@st.cache_resource
+def init_agent():
+    config = get_memory_config()
+    return Memory.from_config(config)
 
 try:
     memory = init_agent()
@@ -42,12 +55,12 @@ except Exception as e:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Wyświetlanie dotychczasowej historii rozmowy
+# Wyświetlanie historii
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Obsługa wpisywania wiadomości przez użytkownika
+# Obsługa wiadomości
 if prompt := st.chat_input("Napisz coś do swojego agenta..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -62,11 +75,11 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
             mem_list = related_memories["results"]
         else:
             mem_list = related_memories if isinstance(related_memories, list) else []
-        context_str = "\n".join([m['memory'] for m in mem_list if 'memory' in m]) if mem_list else "Brak wcześniejszych wspomnień."
+        context_str = "\n".join([m['memory'] for m in mem_list if isinstance(m, dict) and 'memory' in m]) if mem_list else "Brak wcześniejszych wspomnień."
     except Exception:
         context_str = "Brak wcześniejszych wspomnień."
 
-    # Przygotowanie klienta Anthropic
+    # Klient Anthropic
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -81,7 +94,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
         with st.spinner("Agent myśli..."):
             try:
                 response = client.messages.create(
-                    model="claude-sonnet-5-5",
+                    model="claude-3-5-sonnet-latest",
                     max_tokens=1000,
                     system=system_prompt,
                     messages=messages_payload
@@ -89,7 +102,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                 assistant_reply = response.content[0].text
                 st.markdown(assistant_reply)
                 
-                # Zapisanie nowej interakcji w pamięci Mem0
+                # Zapis do pamięci
                 memory.add(messages=[{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_reply}], user_id=user_id)
                 
                 st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
