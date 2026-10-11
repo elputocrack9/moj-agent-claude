@@ -8,7 +8,6 @@ import streamlit as st
 import anthropic
 import pandas as pd
 import openpyxl
-from duckduckgo_search import DDGS
 
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖", layout="wide")
 
@@ -40,6 +39,14 @@ if "current_chat_id" not in st.session_state:
         conversations[new_id] = {"title": "Nowa konwersacja", "messages": []}
         save_data(conversations)
         st.session_state.current_chat_id = new_id
+
+# Walidacja aktywnego ID
+current_id = st.session_state.current_chat_id
+if current_id not in conversations:
+    current_id = list(conversations.keys())[0]
+    st.session_state.current_chat_id = current_id
+
+current_chat = conversations[current_id]
 
 # --- PANEL BOCZNY: ZARZĄDZANIE, USTAWIENIA I EKSPORT ---
 with st.sidebar:
@@ -93,7 +100,7 @@ with st.sidebar:
     st.header("⚙️ Ustawienia modelu")
     
     persona_options = {
-        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI z dostępem do internetu. Masz również dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
+        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI. Masz dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
         "Programista Python / Excel Ekspert": "Jesteś ekspertem Pythona i analitykiem danych w Excelu. Piszesz zaawansowane skrypty, czytelny kod i tworzysz profesjonalne pliki Excela z automatycznymi formułami i formatowaniem w blokach kodu ```python.",
         "Kreatywny Copywriter": "Jesteś utalentowanym copywriterem i ekspertem od marketingu. Twoje wypowiedzi są angażujące i perswazyjne.",
         "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Skup się na logice, liczbach, strukturze oraz merytorycznym podejściu."
@@ -103,7 +110,6 @@ with st.sidebar:
 
     st.divider()
     
-    current_id = st.session_state.current_chat_id
     if current_id in conversations:
         current_chat_export = conversations[current_id]
         export_text = f"# Czat: {current_chat_export.get('title', 'Konwersacja')}\n\n"
@@ -127,14 +133,6 @@ with st.sidebar:
             use_container_width=True
         )
 
-# Walidacja aktywnego ID
-current_id = st.session_state.current_chat_id
-if current_id not in conversations:
-    current_id = list(conversations.keys())[0]
-    st.session_state.current_chat_id = current_id
-
-current_chat = conversations[current_id]
-
 st.title("🤖 Personalny Agent AI")
 st.markdown(f"Aktualny czat: **{current_chat.get('title', 'Konwersacja')}** | Tryb: *{selected_persona}*")
 
@@ -152,15 +150,111 @@ def execute_excel_code(code_str):
         st.error(f"Błąd podczas generowania pliku Excel: {e}")
     return None, None
 
-def perform_web_search(query):
-    try:
-        results = DDGS().text(query, max_results=4)
-        if results:
-            return json.dumps(results, ensure_ascii=False)
-        return "Brak wyników wyszukiwania."
-    except Exception as e:
-        return f"Błąd wyszukiwania: {str(e)}"
+# --- OBSŁUGA INPUTU I WYSYŁANIA NA POCZĄTKU STRUMIENIA ---
+uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "xlsx", "csv"])
+prompt = st.chat_input("Napisz coś do swojego agenta...")
 
+if prompt or uploaded_file:
+    user_content_blocks = []
+    
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
+        encoded_file = base64.b64encode(file_bytes).decode("utf-8")
+        file_type = uploaded_file.type
+        
+        if file_type.startswith("image/"):
+            user_content_blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": file_type, "data": encoded_file}
+            })
+        elif file_type == "application/pdf":
+            user_content_blocks.append({
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": encoded_file}
+            })
+        elif file_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv"]:
+            try:
+                if file_type == "text/csv":
+                    df = pd.read_csv(io.BytesIO(file_bytes))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_bytes))
+                csv_preview = df.head(20).to_csv(index=False)
+                user_content_blocks.append({
+                    "type": "text",
+                    "text": f"[Użytkownik załączył plik danych '{uploaded_file.name}'. Oto pierwsze wiersze danych w formacie CSV]:\n{csv_preview}"
+                })
+            except Exception as ex:
+                st.error(f"Nie udało się odczytać arkusza: {ex}")
+
+    if prompt:
+        user_content_blocks.append({"type": "text", "text": prompt})
+    else:
+        if not user_content_blocks:
+            user_content_blocks.append({"type": "text", "text": "[Użytkownik załączył plik]"})
+
+    if len(current_chat["messages"]) == 0:
+        title_text = prompt if prompt else "Załącznik"
+        current_chat["title"] = title_text[:30] + ("..." if len(title_text) > 30 else "")
+
+    current_chat["messages"].append({"role": "user", "content": user_content_blocks})
+    save_data(conversations)
+
+    # Wywołanie API Anthropic
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            st.error("Brak klucza ANTHROPIC_API_KEY w Secrets lub zmiennych środowiskowych!")
+            st.stop()
+            
+        client = anthropic.Anthropic(api_key=api_key)
+
+        other_chats_memory = "\n[Kontekst z innych Twoich wątków/rozmów z użytkownikiem]:\n"
+        has_other_content = False
+        for cid, cdata in conversations.items():
+            if cid != current_id:
+                chat_title = cdata.get("title", "Czat")
+                snippet = ""
+                for msg in cdata.get("messages", []):
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        for p in content:
+                            if isinstance(p, dict) and p.get("type") == "text":
+                                snippet += p.get("text", "") + " "
+                    elif isinstance(content, str):
+                        snippet += content + " "
+                if snippet.strip():
+                    has_other_content = True
+                    other_chats_memory += f"- Wątek '{chat_title}': {snippet[:300]}...\n"
+
+        final_system_prompt = system_prompt_base
+        if has_other_content:
+            final_system_prompt += f"\n{other_chats_memory}"
+
+        messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
+
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2500,
+            system=final_system_prompt,
+            messages=messages_payload
+        )
+        
+        assistant_reply = ""
+        for content_block in response.content:
+            if hasattr(content_block, "text"):
+                assistant_reply += content_block.text
+        
+        if not assistant_reply:
+            assistant_reply = str(response.content)
+
+        current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
+        save_data(conversations)
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"Wystąpił krytyczny błąd podczas komunikacji z API: {e}")
+
+# --- RENDEROWANIE HISTORIE WIADOMOŚCI ---
 for idx, message in enumerate(current_chat["messages"]):
     role = message["role"]
     content = message["content"]
@@ -220,6 +314,3 @@ for idx, message in enumerate(current_chat["messages"]):
                 save_data(conversations)
                 st.session_state[f"editing_msg_{current_id}_{idx}"] = False
                 st.rerun()
-
-uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "xlsx", "csv"])
-prompt = st.chat_input("Napisz coś do swojego agenta...")
