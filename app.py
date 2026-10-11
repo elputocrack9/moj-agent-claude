@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import base64
 import streamlit as st
 import anthropic
 
@@ -24,22 +25,18 @@ def save_data(data):
     except Exception as e:
         st.error(f"Błąd zapisu danych: {e}")
 
-# Inicjalizacja bazy konwersacji
 conversations = load_data()
 
-# Zarządzanie aktywnym czatem w sesji
 if "current_chat_id" not in st.session_state:
     if conversations:
-        # Domyślnie wybierz pierwszą z dostępnych
         st.session_state.current_chat_id = list(conversations.keys())[0]
     else:
-        # Utwórz nową, jeśli brak
         new_id = str(uuid.uuid4())[:8]
         conversations[new_id] = {"title": "Nowa konwersacja", "messages": []}
         save_data(conversations)
         st.session_state.current_chat_id = new_id
 
-# --- PANEL BOCZNY (HISTORIA CZATÓW JAK W GEMINI) ---
+# --- PANEL BOCZNY ---
 with st.sidebar:
     st.header("💬 Twoje Konwersacje")
     
@@ -52,11 +49,8 @@ with st.sidebar:
 
     st.divider()
 
-    # Wyświetlanie listy wszystkich konwersacji
-    # Sortujemy od najnowszych (klucze lub po prostu iteracja)
     for chat_id, chat_data in list(conversations.items()):
         title = chat_data.get("title", "Konwersacja")
-        # Podświetlenie aktywnego czatu
         is_active = (chat_id == st.session_state.current_chat_id)
         
         col1, col2 = st.columns([0.8, 0.2])
@@ -78,10 +72,8 @@ with st.sidebar:
                         st.session_state.current_chat_id = new_id
                     st.rerun()
 
-# Główny interfejs czatu
 current_id = st.session_state.current_chat_id
 if current_id not in conversations:
-    # Zabezpieczenie, gdyby aktualny ID został usunięty
     current_id = list(conversations.keys())[0]
     st.session_state.current_chat_id = current_id
 
@@ -90,34 +82,96 @@ current_chat = conversations[current_id]
 st.title("🤖 Personalny Agent AI")
 st.markdown(f"Aktualny czat: **{current_chat.get('title', 'Konwersacja')}**")
 
-# Wyświetlanie wiadomości z aktywnego czatu
+# Wyświetlanie wiadomości z historii
 for message in current_chat["messages"]:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        # Obsługa wyświetlania załączników/obrazów w historii, jeśli istniały
+        content = message["content"]
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        st.markdown(part["text"])
+                    elif part.get("type") == "image":
+                        source = part.get("source", {})
+                        data_b64 = source.get("data", "")
+                        media_type = source.get("media_type", "image/png")
+                        st.image(f"data:{media_type};base64,{data_b64}", width=300)
+        else:
+            st.markdown(str(content))
 
-# Obsługa wpisywania wiadomości
-if prompt := st.chat_input("Napisz coś do swojego agenta..."):
-    # Jeśli to pierwsza wiadomość, ustaw tytuł czatu na podstawie treści promptu
+# --- SEKCJA INPUTU I ZAŁĄCZNIKÓW ---
+uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt"])
+prompt = st.chat_input("Napisz coś do swojego agenta...")
+
+if prompt or uploaded_file:
+    # Przygotowanie zawartości wiadomości użytkownika (multimodalnej)
+    user_content_blocks = []
+    
+    # Obsługa pliku graficznego/dokumentu
+    file_info_for_history = None
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
+        encoded_file = base64.b64encode(file_bytes).decode("utf-8")
+        file_type = uploaded_file.type
+        
+        if file_type.startswith("image/"):
+            user_content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": file_type,
+                    "data": encoded_file,
+                }
+            })
+        elif file_type == "application/pdf":
+            user_content_blocks.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": encoded_file
+                }
+            })
+
+    if prompt:
+        user_content_blocks.append({
+            "type": "text",
+            "text": prompt
+        })
+    else:
+        user_content_blocks.append({
+            "type": "text",
+            "text": "[Użytkownik załączył plik]"
+        })
+
+    # Nadawanie tytułu nowemu czatowi
     if len(current_chat["messages"]) == 0:
-        current_chat["title"] = prompt[:30] + ("..." if len(prompt) > 30 else "")
+        title_text = prompt if prompt else "Załącznik"
+        current_chat["title"] = title_text[:30] + ("..." if len(title_text) > 30 else "")
 
-    current_chat["messages"].append({"role": "user", "content": prompt})
+    # Zapis wiadomości użytkownika
+    current_chat["messages"].append({"role": "user", "content": user_content_blocks})
     save_data(conversations)
 
     with st.chat_message("user"):
-        st.markdown(prompt)
+        if prompt:
+            st.markdown(prompt)
+        if uploaded_file is not None and uploaded_file.type.startswith("image/"):
+            st.image(uploaded_file, width=300)
 
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
+    # Przygotowanie payloadu do Anthropic API
     messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
-        with st.spinner("Agent myśli..."):
+        with st.spinner("Agent analizuje..."):
             try:
                 response = client.messages.create(
                     model="claude-sonnet-5-5",
-                    max_tokens=1000,
+                    max_tokens=1500,
                     messages=messages_payload
                 )
                 
@@ -130,6 +184,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                     assistant_reply = str(response.content)
 
                 st.markdown(assistant_reply)
+                
                 current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
                 save_data(conversations)
                 
