@@ -1,5 +1,4 @@
 import os
-import tempfile
 import streamlit as st
 import anthropic
 from mem0 import Memory
@@ -9,13 +8,10 @@ st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 st.title("🤖 Personalny Agent AI")
 st.markdown("Model: Claude 3.5 Sonnet | Pamięć: Mem0 (Lokalna)")
 
-# Tworzenie bezpiecznej ścieżki dla lokalnej bazy Qdrant, aby zapobiec blokadzie plików
+# Konfiguracja Mem0 z bezproblemową bazą SQLite (brak blokad plików)
 @st.cache_resource
-def get_memory_config():
+def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    
-    # Tworzymy tymczasowy katalog, żeby uniknąć błędu "already accessed by another instance"
-    qdrant_dir = os.path.join(tempfile.gettempdir(), "qdrant_mem0_db")
     
     config = {
         "llm": {
@@ -32,17 +28,14 @@ def get_memory_config():
             }
         },
         "vector_store": {
-            "provider": "qdrant",
+            "provider": "chroma",
             "config": {
-                "path": qdrant_dir
+                "collection_name": "memories",
+                "path": "/tmp/chroma_db"
             }
         }
     }
-    return config
-
-@st.cache_resource
-def init_agent():
-    config = get_memory_config()
+    
     return Memory.from_config(config)
 
 try:
