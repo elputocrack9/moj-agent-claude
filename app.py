@@ -1,13 +1,14 @@
 import os
 from mem0 import Memory
 import streamlit as st
+import anthropic
 
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖")
 
 st.title("🤖 Personalny Agent AI")
 st.markdown("Model: Claude Sonnet | Pamięć: Mem0 (Lokalna)")
 
-# Inicjalizacja agenta i pamięci Mem0 (z użyciem HuggingFace zamiast OpenAI)
+# Inicjalizacja pamięci Mem0 (użycie HuggingFace lokalnie do wektorów)
 @st.cache_resource
 def init_agent():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
@@ -52,13 +53,20 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Pobieranie kontekstu z pamięci Mem0
     user_id = "default_user"
-    related_memories = memory.search(prompt, user_id=user_id)
-    context_str = "\n".join([m['memory'] for m in related_memories]) if related_memories else "Brak wcześniejszych wspomnień."
+    
+    # W nowej wersji Mem0 przeszukujemy pamięć za pomocą zapytania 'query'
+    try:
+        related_memories = memory.search(query=prompt, user_id=user_id)
+        if isinstance(related_memories, dict) and "results" in related_memories:
+            mem_list = related_memories["results"]
+        else:
+            mem_list = related_memories if isinstance(related_memories, list) else []
+        context_str = "\n".join([m['memory'] for m in mem_list if 'memory' in m]) if mem_list else "Brak wcześniejszych wspomnień."
+    except Exception:
+        context_str = "Brak wcześniejszych wspomnień."
 
-    # Przygotowanie wiadomości dla Claude'a
-    import anthropic
+    # Przygotowanie klienta Anthropic
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -82,7 +90,7 @@ if prompt := st.chat_input("Napisz coś do swojego agenta..."):
                 st.markdown(assistant_reply)
                 
                 # Zapisanie nowej interakcji w pamięci Mem0
-                memory.add(f"Użytkownik powiedział: {prompt}. Odpowiedź agenta: {assistant_reply}", user_id=user_id)
+                memory.add(messages=[{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_reply}], user_id=user_id)
                 
                 st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
             except Exception as e:
