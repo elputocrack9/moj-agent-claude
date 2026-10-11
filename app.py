@@ -82,10 +82,9 @@ current_chat = conversations[current_id]
 st.title("🤖 Personalny Agent AI")
 st.markdown(f"Aktualny czat: **{current_chat.get('title', 'Konwersacja')}**")
 
-# Wyświetlanie wiadomości z historii
+# Wyświetlanie wiadomości z bieżącego czatu
 for message in current_chat["messages"]:
     with st.chat_message(message["role"]):
-        # Obsługa wyświetlania załączników/obrazów w historii, jeśli istniały
         content = message["content"]
         if isinstance(content, list):
             for part in content:
@@ -105,11 +104,8 @@ uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=
 prompt = st.chat_input("Napisz coś do swojego agenta...")
 
 if prompt or uploaded_file:
-    # Przygotowanie zawartości wiadomości użytkownika (multimodalnej)
     user_content_blocks = []
     
-    # Obsługa pliku graficznego/dokumentu
-    file_info_for_history = None
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
         encoded_file = base64.b64encode(file_bytes).decode("utf-8")
@@ -145,12 +141,10 @@ if prompt or uploaded_file:
             "text": "[Użytkownik załączył plik]"
         })
 
-    # Nadawanie tytułu nowemu czatowi
     if len(current_chat["messages"]) == 0:
         title_text = prompt if prompt else "Załącznik"
         current_chat["title"] = title_text[:30] + ("..." if len(title_text) > 30 else "")
 
-    # Zapis wiadomości użytkownika
     current_chat["messages"].append({"role": "user", "content": user_content_blocks})
     save_data(conversations)
 
@@ -163,7 +157,30 @@ if prompt or uploaded_file:
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=api_key)
 
-    # Przygotowanie payloadu do Anthropic API
+    # --- KLUCZOWA ZMIANA: ZBIERANIE HISTORI ZE WSZYSTKICH CZATÓW JAKO KONTEKST ---
+    global_history_summary = "Oto podsumowanie/historia wcześniejszych rozmów z użytkownikiem we wszystkich wątkach:\n"
+    for cid, cdata in conversations.items():
+        if cid != current_id and cdata.get("messages"):
+            global_history_summary += f"\n--- Wątek: {cdata.get('title', 'Czat')} ---\n"
+            for msg in cdata["messages"]:
+                role = msg["role"]
+                content = msg["content"]
+                # Wyciągamy sam tekst do pamięci długoterminowej między wątkami
+                text_snippet = ""
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text_snippet += part.get("text", "") + " "
+                else:
+                    text_snippet = str(content)
+                global_history_summary += f"{role}: {text_snippet.strip()}\n"
+
+    system_prompt = f"""Jesteś pomocnym, inteligentnym agentem AI. Masz pełną pamięć o użytkowniku z jego poprzednich konwersacji w innych wątkach. Wykorzystuj te informacje naturalnie w odpowiedziach:
+    
+    {global_history_summary}
+    """
+
+    # Payload bieżącego czatu
     messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
@@ -172,6 +189,7 @@ if prompt or uploaded_file:
                 response = client.messages.create(
                     model="claude-sonnet-5-5",
                     max_tokens=1500,
+                    system=system_prompt,
                     messages=messages_payload
                 )
                 
