@@ -8,6 +8,7 @@ import streamlit as st
 import anthropic
 import pandas as pd
 import openpyxl
+from duckduckgo_search import DDGS
 
 st.set_page_config(page_title="Personalny Agent AI", page_icon="🤖", layout="wide")
 
@@ -92,10 +93,10 @@ with st.sidebar:
     st.header("⚙️ Ustawienia modelu")
     
     persona_options = {
-        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI. Masz dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
+        "Standardowy Asystent": "Jesteś pomocnym, inteligentnym agentem AI z dostępem do przeszukiwania internetu w czasie rzeczywistym. Masz również dostęp do podsumowania wcześniejszych rozmów z użytkownikiem. Jeżeli użytkownik prosi o plik Excela, wygeneruj poprawny kod Python tworzący ten plik za pomocą openpyxl/pandas w bloku ```python.",
         "Programista Python / Excel Ekspert": "Jesteś ekspertem Pythona i analitykiem danych w Excelu. Piszesz zaawansowane skrypty, czytelny kod i tworzysz profesjonalne pliki Excela z automatycznymi formułami i formatowaniem w blokach kodu ```python.",
         "Kreatywny Copywriter": "Jesteś utalentowanym copywriterem i ekspertem od marketingu. Twoje wypowiedzi są angażujące i perswazyjne.",
-        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Skup się na logice, liczbach, strukturze oraz merytorycznym podejściu."
+        "Analityk Danych": "Jesteś precyzyjnym analitykiem danych. Korzystaj z wyszukiwania w internecie w razie potrzeby weryfikacji faktów i liczb."
     }
     selected_persona = st.selectbox("Rola / Tryb agenta:", list(persona_options.keys()))
     system_prompt_base = persona_options[selected_persona]
@@ -151,11 +152,40 @@ def execute_excel_code(code_str):
         st.error(f"Błąd podczas generowania pliku Excel: {e}")
     return None, None
 
+# Narzędzie wyszukiwania internetowego dla Claude
+search_tool_definition = {
+    "name": "web_search",
+    "description": "Wyszukuje informacje w Internecie. Używaj tego narzędzia zawsze, gdy potrzebujesz aktualnych wiadomości, faktów, dokumentacji lub danych z sieci.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Zapytanie wyszukiwania w Google / Internecie."
+            }
+        },
+        "required": ["query"]
+    }
+}
+
+def perform_web_search(query):
+    try:
+        results = DDGS().text(query, max_results=4)
+        if results:
+            return json.dumps(results, ensure_ascii=False)
+        return "Brak wyników wyszukiwania."
+    except Exception as e:
+        return f"Błąd wyszukiwania: {str(e)}"
+
 for idx, message in enumerate(current_chat["messages"]):
     role = message["role"]
     content = message["content"]
     
-    with st.chat_message(role):
+    # Pomijamy surowe wpisy techniczne narzędzi w historii renderowanej bezpośrednio
+    if role == "tool":
+        continue
+
+    with st.chat_message(role if role != "tool" else "assistant"):
         text_content = ""
         if isinstance(content, list):
             for part in content:
@@ -170,8 +200,8 @@ for idx, message in enumerate(current_chat["messages"]):
                         st.image(f"data:{media_type};base64,{data_b64}", width=300)
                     elif part.get("type") == "document":
                         st.info("📄 [Załączony dokument PDF]")
-        else:
-            text_content = str(content)
+        elif isinstance(content, str):
+            text_content = content
             st.markdown(text_content)
 
         if role == "assistant" and "```python" in text_content and "xlsx" in text_content:
@@ -199,7 +229,8 @@ for idx, message in enumerate(current_chat["messages"]):
                 st.session_state[f"editing_msg_{current_id}_{idx}"] = True
 
         if st.session_state.get(f"editing_msg_{current_id}_{idx}", False):
-            edit_text = st.text_area("Edytuj treść:", value=str(content[0].get("text") if isinstance(content, list) else content), key=f"edit_input_{current_id}_{idx}")
+            raw_text = content[0].get("text", "") if isinstance(content, list) else str(content)
+            edit_text = st.text_area("Edytuj treść:", value=raw_text, key=f"edit_input_{current_id}_{idx}")
             if st.button("Zaktualizuj i wyślij ponownie", key=f"submit_edit_{current_id}_{idx}"):
                 if isinstance(content, list):
                     content[0]["text"] = edit_text
@@ -211,7 +242,7 @@ for idx, message in enumerate(current_chat["messages"]):
                 st.rerun()
 
 uploaded_file = st.file_uploader("Załącz obraz lub plik (opcjonalnie):", type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "xlsx", "csv"])
-prompt = st.chat_input("Napisz coś do swojego agenta (np. 'Stwórz budżet domowy w Excelu')...")
+prompt = st.chat_input("Napisz coś do swojego agenta (np. 'Sprawdź w internecie najnowsze wiadomości o...')...")
 
 if prompt or uploaded_file:
     user_content_blocks = []
@@ -279,8 +310,8 @@ if prompt or uploaded_file:
                     for p in content:
                         if isinstance(p, dict) and p.get("type") == "text":
                             snippet += p.get("text", "") + " "
-                else:
-                    snippet += str(content) + " "
+                elif isinstance(content, str):
+                    snippet += content + " "
             if snippet.strip():
                 has_other_content = True
                 other_chats_memory += f"- Wątek '{chat_title}': {snippet[:300]}...\n"
@@ -292,28 +323,62 @@ if prompt or uploaded_file:
     messages_payload = [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"]]
 
     with st.chat_message("assistant"):
-        with st.spinner("Agent analizuje i przetwarza..."):
+        with st.spinner("Agent analizuje, przeszukuje internet i przetwarza..."):
             try:
-                response = client.messages.create(
-                    model="claude-sonnet-5-5",
-                    max_tokens=2500,
-                    system=final_system_prompt,
-                    messages=messages_payload
-                )
-                
-                assistant_reply = ""
-                for content_block in response.content:
-                    if hasattr(content_block, "text"):
-                        assistant_reply += content_block.text
-                
-                if not assistant_reply:
-                    assistant_reply = str(response.content)
+                # Pętla agenta obsługująca żądanie wyszukiwania (Tool Use loop)
+                while True:
+                    response = client.messages.create(
+                        model="claude-sonnet-5-5",
+                        max_tokens=2500,
+                        system=final_system_prompt,
+                        tools=[search_tool_definition],
+                        messages=messages_payload
+                    )
+                    
+                    if response.stop_reason == "tool_use":
+                        # Znajdź blok żądania narzędzia wyszukiwania
+                        tool_use_block = next((block for block in response.content if block.type == "tool_use"), None)
+                        if tool_use_block:
+                            tool_use_id = tool_use_block.id
+                            tool_input = tool_use_block.input
+                            query_str = tool_input.get("query", "")
+                            
+                            # Wykonaj zapytanie do sieci przez DuckDuckGo
+                            search_results_json = perform_web_search(query_str)
+                            
+                            # Dodaj odpowiedź asystenta oraz wynik narzędzia do historii wymiany z API
+                            messages_payload.append({
+                                "role": "assistant",
+                                "content": response.content
+                            })
+                            messages_payload.append({
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": search_results_json
+                                    }
+                                ]
+                            })
+                            continue
+                    
+                    # Jeśli model zakończył pracę i dał gotową odpowiedź tekstową
+                    assistant_reply = ""
+                    for content_block in response.content:
+                        if hasattr(content_block, "text"):
+                            assistant_reply += content_block.text
+                    
+                    if not assistant_reply:
+                        assistant_reply = str(response.content)
 
-                st.markdown(assistant_reply)
-                
-                current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
-                save_data(conversations)
-                st.rerun()
+                    st.markdown(assistant_reply)
+                    
+                    # Zapisujemy finalną odpowiedź do pamięci wątku
+                    current_chat["messages"].append({"role": "assistant", "content": assistant_reply})
+                    save_data(conversations)
+                    st.rerun()
+                    break
                 
             except Exception as e:
                 st.error(f"Wystąpił błąd podczas generowania odpowiedzi: {e}")
